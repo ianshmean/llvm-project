@@ -1,6 +1,6 @@
 ; RUN: opt -gvn -S < %s | FileCheck %s
 
-target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128-ni:4"
+target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128-ni:4:5"
 target triple = "x86_64-unknown-linux-gnu"
 
 define void @f0(i1 %alwaysFalse, i64 %val, i64* %loc) {
@@ -37,3 +37,21 @@ define i64 @f1(i1 %alwaysFalse, i8 addrspace(4)* %val, i8 addrspace(4)** %loc) {
  alwaysTaken:
   ret i64 42
 }
+
+ define i8 addrspace(5)* @multini(i1 %alwaysFalse, i8 addrspace(4)* %val, i8 addrspace(4)** %loc) {
+ ; CHECK-LABEL: @multini(
+ ; CHECK-NOT: inttoptr
+ ; CHECK-NOT: ptrtoint
+ ; CHECK-NOT: addrspacecast
+  entry:
+   store i8 addrspace(4)* %val, i8 addrspace(4)** %loc
+   br i1 %alwaysFalse, label %neverTaken, label %alwaysTaken
+
+  neverTaken:
+   %loc.bc = bitcast i8 addrspace(4)** %loc to i8 addrspace(5)**
+   %differentas = load i8 addrspace(5)*, i8 addrspace(5)** %loc.bc
+   ret i8 addrspace(5)* %differentas
+
+  alwaysTaken:
+   ret i8 addrspace(5)* null
+ }

@@ -4,7 +4,7 @@ set(LLVM_LINK_COMPONENTS
   native
   )
 
-add_llvm_tool(llvm-exegesis
+add_llvm_tool(llvm-exegesis DISABLE_LLVM_LINK_LLVM_DYLIB
   llvm-exegesis.cpp
   )
 

@@ -115,9 +115,6 @@ macro(add_tablegen target project)
     set(LLVM_ENABLE_OBJLIB ON)
   endif()
 
-  add_llvm_executable(${target} DISABLE_LLVM_LINK_LLVM_DYLIB ${ARGN})
-  set(LLVM_LINK_COMPONENTS ${${target}_OLD_LLVM_LINK_COMPONENTS})
-
   set(${project}_TABLEGEN "${target}" CACHE
       STRING "Native TableGen executable. Saves building one when cross-compiling.")
 
@@ -154,16 +151,23 @@ macro(add_tablegen target project)
       endif()
       add_custom_command(OUTPUT ${${project}_TABLEGEN_EXE}
         COMMAND ${tblgen_build_cmd}
-        DEPENDS CONFIGURE_LLVM_NATIVE ${target}
+        DEPENDS CONFIGURE_LLVM_NATIVE
         WORKING_DIRECTORY ${LLVM_NATIVE_BUILD}
         COMMENT "Building native TableGen..."
         USES_TERMINAL)
       add_custom_target(${project}-tablegen-host DEPENDS ${${project}_TABLEGEN_EXE})
       set(${project}_TABLEGEN_TARGET ${project}-tablegen-host PARENT_SCOPE)
+
+      if ( NOT LLVM_BUILD_UTILS )
+        set(EXCLUDE_FROM_ALL ON)
+      endif()
     endif()
   endif()
 
-  if (${project} STREQUAL LLVM AND NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+  add_llvm_executable(${target} DISABLE_LLVM_LINK_LLVM_DYLIB ${ARGN})
+  set(LLVM_LINK_COMPONENTS ${${target}_OLD_LLVM_LINK_COMPONENTS})
+
+  if (${project} STREQUAL LLVM AND NOT LLVM_INSTALL_TOOLCHAIN_ONLY AND LLVM_BUILD_UTILS)
     if(${target} IN_LIST LLVM_DISTRIBUTION_COMPONENTS OR
         NOT LLVM_DISTRIBUTION_COMPONENTS)
       set(export_to_llvmexports EXPORT LLVMExports)

@@ -1227,6 +1227,13 @@ SDValue WebAssemblyTargetLowering::LowerShift(SDValue Op,
                      DAG.getConstant(Shift, DL, MVT::i32));
 }
 
+bool WebAssemblyTargetLowering::isNoopAddrSpaceCast(unsigned SrcAS,
+                                                    unsigned DestAS) const {
+  assert(SrcAS != DestAS && "Expected different address spaces!");
+
+  return true;
+}
+
 //===----------------------------------------------------------------------===//
 //                          WebAssembly Optimization Hooks
 //===----------------------------------------------------------------------===//

@@ -582,7 +582,7 @@ if (LLVM_ENABLE_WARNINGS AND (LLVM_COMPILER_IS_GCC_COMPATIBLE OR CLANG_CL))
 
   if (LLVM_ENABLE_PEDANTIC AND LLVM_COMPILER_IS_GCC_COMPATIBLE)
     append("-pedantic" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
-    append("-Wno-long-long" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    append("-Wno-long-long -Wundef" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
   endif()
 
   add_flag_if_supported("-Wimplicit-fallthrough" IMPLICIT_FALLTHROUGH_FLAG)
