@@ -181,6 +181,13 @@ class Type;
       return getNoWrapFlags(FlagNW) != FlagAnyWrap;
     }
 
+    void setHasNIPtr(bool HasNIPtr) {
+      if (HasNIPtr)
+        SubclassData |= FlagHasNIPointers;
+      else
+        SubclassData &= ~FlagHasNIPointers;
+    }
+
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static bool classof(const SCEV *S) {
       return S->getSCEVType() == scAddExpr || S->getSCEVType() == scMulExpr ||
@@ -215,23 +222,53 @@ class Type;
   class SCEVAddExpr : public SCEVCommutativeExpr {
     friend class ScalarEvolution;
 
+  protected:
     SCEVAddExpr(const FoldingSetNodeIDRef ID,
                 const SCEV *const *O, size_t N)
       : SCEVCommutativeExpr(ID, scAddExpr, O, N) {}
 
   public:
-    Type *getType() const {
-      // Use the type of the last operand, which is likely to be a pointer
-      // type, if there is one. This doesn't usually matter, but it can help
-      // reduce casts when the expressions are expanded.
-      return getOperand(getNumOperands() - 1)->getType();
+    /// Returns the type of the add expression, by looking either at the last
+    /// operand or deferring to the SCEVAddNIExpr subclass for non-integral
+    /// pointers.
+    Type *getType() const;
+
+    /// Methods for support type inquiry through isa, cast, and dyn_cast:
+    static bool classof(const SCEV *S) { return S->getSCEVType() == scAddExpr; }
+  };
+
+  /// This node represents an addition of some number of SCEVs, one which
+  /// is a non-integral pointer type, requiring us to know the type exactly for
+  /// correctness.
+  class SCEVAddNIExpr : public SCEVAddExpr {
+    friend class ScalarEvolution;
+    PointerType *NIType;
+
+    SCEVAddNIExpr(const FoldingSetNodeIDRef ID, const SCEV *const *O, size_t N,
+                  PointerType *NIType)
+        : SCEVAddExpr(ID, O, N), NIType(NIType) {
+      SubclassData |= FlagHasNIPointers;
     }
+
+  public:
+    Type *getType() const { return NIType; }
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static bool classof(const SCEV *S) {
-      return S->getSCEVType() == scAddExpr;
+      return S->getSCEVType() == scAddExpr && S->hasNonIntegralPointers();
     }
   };
+
+  inline Type *SCEVAddExpr::getType() const {
+    // In general, use the type of the last operand, which is likely to be a
+    // pointer type, if there is one. This doesn't usually matter, but it can
+    // help reduce casts when the expressions are expanded. In the (unusual)
+    // case that we're working with non-integral pointers, we have a subclass
+    // that stores that type explicitly.
+    if (hasNonIntegralPointers())
+      return cast<SCEVAddNIExpr>(this)->getType();
+    return getOperand(getNumOperands() - 1)->getType();
+  }
 
   /// This node represents multiplication of some number of SCEVs.
   class SCEVMulExpr : public SCEVCommutativeExpr {
@@ -242,6 +279,18 @@ class Type;
       : SCEVCommutativeExpr(ID, scMulExpr, O, N) {}
 
   public:
+    Type *getType() const {
+      // In general, we can't form SCEVMulExprs with non-integral pointer types,
+      // but for the moment we need to allow a special case: Multiplying by
+      // -1 to be able express the difference between two pointers. In order
+      // to maintain the invariant that SCEVs with the NI flag set should have
+      // a type corresponding to the contained NI ptr, we need to return the
+      // type of the pointer here.
+      if (hasNonIntegralPointers())
+        return getOperand(getNumOperands() - 1)->getType();
+      return SCEVCommutativeExpr::getType();
+    }
+
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static bool classof(const SCEV *S) {
       return S->getSCEVType() == scMulExpr;
@@ -467,9 +516,12 @@ class Type;
     /// instances owned by a ScalarEvolution.
     SCEVUnknown *Next;
 
-    SCEVUnknown(const FoldingSetNodeIDRef ID, Value *V,
-                ScalarEvolution *se, SCEVUnknown *next) :
-      SCEV(ID, scUnknown), CallbackVH(V), SE(se), Next(next) {}
+    SCEVUnknown(const FoldingSetNodeIDRef ID, Value *V, ScalarEvolution *se,
+                SCEVUnknown *next, bool ValueIsNIPtr)
+        : SCEV(ID, scUnknown, 1), CallbackVH(V), SE(se), Next(next) {
+      if (ValueIsNIPtr)
+        SubclassData |= FlagHasNIPointers;
+    }
 
     // Implement CallbackVH.
     void deleted() override;

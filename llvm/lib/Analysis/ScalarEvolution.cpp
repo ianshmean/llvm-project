@@ -354,12 +354,13 @@ Type *SCEV::getType() const {
   case scSignExtend:
     return cast<SCEVCastExpr>(this)->getType();
   case scAddRecExpr:
-  case scMulExpr:
   case scUMaxExpr:
   case scSMaxExpr:
   case scUMinExpr:
   case scSMinExpr:
     return cast<SCEVNAryExpr>(this)->getType();
+  case scMulExpr:
+    return cast<SCEVMulExpr>(this)->getType();
   case scAddExpr:
     return cast<SCEVAddExpr>(this)->getType();
   case scUDivExpr:
@@ -2419,8 +2420,9 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
   }
 
   // Limit recursion calls depth.
-  if (Depth > MaxArithDepth)
+  if (Depth > MaxArithDepth || hasHugeExpression(Ops)) {
     return getOrCreateAddExpr(Ops, Flags);
+  }
 
   // Okay, check to see if the same value occurs in the operand list more than
   // once.  If so, merge them together into an multiply expression.  Since we
@@ -2761,16 +2763,27 @@ ScalarEvolution::getOrCreateAddExpr(SmallVectorImpl<const SCEV *> &Ops,
                                     SCEV::NoWrapFlags Flags) {
   FoldingSetNodeID ID;
   ID.AddInteger(scAddExpr);
-  for (const SCEV *Op : Ops)
-    ID.AddPointer(Op);
+  bool HasNIPtr = false;
+  PointerType *NIPtrType = nullptr;
+  for (unsigned i = 0, e = Ops.size(); i != e; ++i) {
+    ID.AddPointer(Ops[i]);
+    if (Ops[i]->hasNonIntegralPointers()) {
+      HasNIPtr = true;
+      NIPtrType = cast<PointerType>(Ops[i]->getType());
+    }
+  }
   void *IP = nullptr;
   SCEVAddExpr *S =
       static_cast<SCEVAddExpr *>(UniqueSCEVs.FindNodeOrInsertPos(ID, IP));
   if (!S) {
     const SCEV **O = SCEVAllocator.Allocate<const SCEV *>(Ops.size());
     std::uninitialized_copy(Ops.begin(), Ops.end(), O);
-    S = new (SCEVAllocator)
-        SCEVAddExpr(ID.Intern(SCEVAllocator), O, Ops.size());
+    if (HasNIPtr)
+      S = new (SCEVAllocator)
+          SCEVAddNIExpr(ID.Intern(SCEVAllocator), O, Ops.size(), NIPtrType);
+    else
+      S = new (SCEVAllocator)
+          SCEVAddExpr(ID.Intern(SCEVAllocator), O, Ops.size());
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
   }
@@ -2783,8 +2796,10 @@ ScalarEvolution::getOrCreateAddRecExpr(SmallVectorImpl<const SCEV *> &Ops,
                                        const Loop *L, SCEV::NoWrapFlags Flags) {
   FoldingSetNodeID ID;
   ID.AddInteger(scAddRecExpr);
-  for (unsigned i = 0, e = Ops.size(); i != e; ++i)
+  for (unsigned i = 0, e = Ops.size(); i != e; ++i) {
+    assert(i == 0 || !Ops[i]->hasNonIntegralPointers());
     ID.AddPointer(Ops[i]);
+  }
   ID.AddPointer(L);
   void *IP = nullptr;
   SCEVAddRecExpr *S =
@@ -2798,6 +2813,7 @@ ScalarEvolution::getOrCreateAddRecExpr(SmallVectorImpl<const SCEV *> &Ops,
     addToLoopUseLists(S);
   }
   S->setNoWrapFlags(Flags);
+  S->setHasNIPtr(Ops[0]->hasNonIntegralPointers());
   return S;
 }
 
@@ -2806,8 +2822,11 @@ ScalarEvolution::getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                     SCEV::NoWrapFlags Flags) {
   FoldingSetNodeID ID;
   ID.AddInteger(scMulExpr);
-  for (unsigned i = 0, e = Ops.size(); i != e; ++i)
+  bool HasNIPtr = false;
+  for (unsigned i = 0, e = Ops.size(); i != e; ++i) {
+    HasNIPtr |= Ops[i]->hasNonIntegralPointers();
     ID.AddPointer(Ops[i]);
+  }
   void *IP = nullptr;
   SCEVMulExpr *S =
     static_cast<SCEVMulExpr *>(UniqueSCEVs.FindNodeOrInsertPos(ID, IP));
@@ -2820,6 +2839,7 @@ ScalarEvolution::getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
     addToLoopUseLists(S);
   }
   S->setNoWrapFlags(Flags);
+  S->setHasNIPtr(HasNIPtr);
   return S;
 }
 
@@ -3631,8 +3651,11 @@ const SCEV *ScalarEvolution::getMinMaxExpr(unsigned Kind,
   if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
   const SCEV **O = SCEVAllocator.Allocate<const SCEV *>(Ops.size());
   std::uninitialized_copy(Ops.begin(), Ops.end(), O);
-  SCEV *S = new (SCEVAllocator) SCEVMinMaxExpr(
+  SCEVMinMaxExpr *S = new (SCEVAllocator) SCEVMinMaxExpr(
       ID.Intern(SCEVAllocator), static_cast<SCEVTypes>(Kind), O, Ops.size());
+  // For MinMaxExprs it's sufficient to see if the first Op has NI data, as the
+  // operands all need to be of the same type.
+  S->setHasNIPtr(Ops[0]->hasNonIntegralPointers());
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
   return S;
@@ -3708,8 +3731,9 @@ const SCEV *ScalarEvolution::getUnknown(Value *V) {
            "Stale SCEVUnknown in uniquing map!");
     return S;
   }
+  bool ValueIsNIPtr = getDataLayout().isNonIntegralPointerType(V->getType());
   SCEV *S = new (SCEVAllocator) SCEVUnknown(ID.Intern(SCEVAllocator), V, this,
-                                            FirstUnknown);
+                                            FirstUnknown, ValueIsNIPtr);
   FirstUnknown = cast<SCEVUnknown>(S);
   UniqueSCEVs.InsertNode(S, IP);
   return S;

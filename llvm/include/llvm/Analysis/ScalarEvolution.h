@@ -116,6 +116,19 @@ public:
     NoWrapMask = (1 << 3) - 1
   };
 
+  /// HasNonIntegralPointerFlag are bitfield indices into SubclassData.
+  ///
+  /// When constructing SCEV expressions for LLVM expressions with non-integral
+  /// pointer types, some additional processing is required to ensure that we
+  /// don't introduce any illegal transformations. However, non-integral pointer
+  /// types are a very rarely used feature, so we want to make sure to only do
+  /// such processing if they are actually used. To ensure minimal performance
+  /// impact, we memoize that fact in using these flags.
+  enum HasNonIntegralPointerFlag {
+    FlagNoNIPointers = 0,
+    FlagHasNIPointers = (1 << 3)
+  };
+
   explicit SCEV(const FoldingSetNodeIDRef ID, unsigned SCEVTy)
       : FastID(ID), SCEVType(SCEVTy) {}
   SCEV(const SCEV &) = delete;
@@ -137,6 +150,10 @@ public:
 
   /// Return true if the specified scev is negated, but not a constant.
   bool isNonConstantNegative() const;
+
+  bool hasNonIntegralPointers() const {
+    return SubclassData & FlagHasNIPointers;
+  }
 
   /// Print out the internal representation of this scalar to the specified
   /// stream.  This should really only be used for debugging purposes.
